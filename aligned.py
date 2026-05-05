@@ -18,11 +18,21 @@ VOIP_PATH = P046 / "p196619_p042_emo_amazement_freeform_VoIP_20260416_171726_to_
 
 P_REF = 20e-6
 TRACE_COLOR = "C0"
+TARGET_FS = 65536
+
+
+def resample_to_target(y: np.ndarray, fs: int, target_fs: int = TARGET_FS) -> np.ndarray:
+    if fs == target_fs:
+        return y
+    g = gcd(int(target_fs), int(fs))
+    return resample_poly(y, up=int(target_fs) // g, down=int(fs) // g, axis=0)
 
 
 def load_mono(path: Path):
-    data, fs = sf.read(str(path), always_2d=True)
-    return data[:, 0].astype(np.float64), fs
+    data, fs_native = sf.read(str(path), always_2d=True)
+    y = data[:, 0].astype(np.float64)
+    y = resample_to_target(y, fs_native)
+    return y, TARGET_FS, fs_native
 
 
 def load_bk(wav_path: Path, json_path: Path):
@@ -31,9 +41,10 @@ def load_bk(wav_path: Path, json_path: Path):
     channels = meta["setup"]["channels"]
     sensitivities = np.array([c["transducer"]["sensitivity"] for c in channels])
     serials = [c["transducer"]["serialNumber"] for c in channels]
-    data, fs = sf.read(str(wav_path), always_2d=True)
+    data, fs_native = sf.read(str(wav_path), always_2d=True)
     pressure = data / sensitivities[np.newaxis, :]
-    return pressure, fs, serials
+    pressure = resample_to_target(pressure.astype(np.float64), fs_native)
+    return pressure, TARGET_FS, serials, fs_native
 
 
 def stats(y: np.ndarray, is_bk: bool):
@@ -45,22 +56,17 @@ def stats(y: np.ndarray, is_bk: bool):
 
 def align_lag(capture: np.ndarray, fs_cap: int, reference: np.ndarray, fs_ref: int,
               bandlimit_hz: float | None = None):
+    assert fs_cap == fs_ref, "all signals should be at TARGET_FS by now"
     ref = reference
     if bandlimit_hz is not None:
         sos = butter(8, bandlimit_hz, btype="low", fs=fs_ref, output="sos")
         ref = sosfiltfilt(sos, ref)
 
-    if fs_cap == fs_ref:
-        cap_rs = capture
-    else:
-        g = gcd(int(fs_ref), int(fs_cap))
-        cap_rs = resample_poly(capture, up=int(fs_ref) // g, down=int(fs_cap) // g)
-
-    corr = correlate(cap_rs, ref, mode="full", method="fft")
-    lags = correlation_lags(len(cap_rs), len(ref), mode="full")
+    corr = correlate(capture, ref, mode="full", method="fft")
+    lags = correlation_lags(len(capture), len(ref), mode="full")
     idx = int(np.argmax(np.abs(corr)))
     lag_seconds = lags[idx] / fs_ref
-    denom = float(np.sqrt(np.sum(cap_rs ** 2) * np.sum(ref ** 2)))
+    denom = float(np.sqrt(np.sum(capture ** 2) * np.sum(ref ** 2)))
     coeff = float(corr[idx] / denom) if denom > 0 else 0.0
     return lag_seconds, coeff
 
@@ -71,10 +77,10 @@ def fmt_title(label: str, fs: int):
 
 
 def main() -> None:
-    ref, fs_ref = load_mono(REF_PATH)
-    bk, fs_bk, serials = load_bk(BK_WAV, BK_JSON)
-    rafa, fs_rafa = load_mono(RAFA_PATH)
-    voip, fs_voip = load_mono(VOIP_PATH)
+    ref, fs_ref, fs_ref_native = load_mono(REF_PATH)
+    bk, fs_bk, serials, fs_bk_native = load_bk(BK_WAV, BK_JSON)
+    rafa, fs_rafa, fs_rafa_native = load_mono(RAFA_PATH)
+    voip, fs_voip, fs_voip_native = load_mono(VOIP_PATH)
 
     rms_per_ch = np.sqrt(np.mean(bk ** 2, axis=0))
     align_ch = int(np.argmax(rms_per_ch))
@@ -95,7 +101,8 @@ def main() -> None:
     traces.append({
         "y": ref, "fs": fs_ref, "lag": 0.0,
         "unit": "Amplitude",
-        "title": fmt_title("Reference (studio)", fs_ref),
+        "title": fmt_title("Reference", fs_ref_native),
+        "peak": peak, "rms": rms, "spl": None,
     })
 
     for c in range(bk.shape[1]):
@@ -104,26 +111,32 @@ def main() -> None:
         traces.append({
             "y": y, "fs": fs_bk, "lag": lag_bk,
             "unit": "Pressure [Pa]",
-            "title": fmt_title(f"BK Ch {c + 1} (SN {serials[c]})", fs_bk),
+            "title": fmt_title(f"BK Ch {c + 1} ", fs_bk_native),
+            "peak": peak, "rms": rms, "spl": spl,
         })
 
     peak, rms, _ = stats(rafa, is_bk=False)
     traces.append({
         "y": rafa, "fs": fs_rafa, "lag": lag_rafa,
         "unit": "Amplitude",
-        "title": fmt_title("RAFA iPhone bottom mic", fs_rafa),
+        "title": fmt_title("RAFA iPhone bottom mic", fs_rafa_native),
+        "peak": peak, "rms": rms, "spl": None,
     })
 
     peak, rms, _ = stats(voip, is_bk=False)
     traces.append({
         "y": voip, "fs": fs_voip, "lag": lag_voip,
         "unit": "Amplitude",
-        "title": fmt_title("VoIP", fs_voip),
+        "title": fmt_title("VoIP", fs_voip_native),
+        "peak": peak, "rms": rms, "spl": None,
     })
 
     print("Per-trace stats:")
     for tr in traces:
+        spl_str = f", SPL = {tr['spl']:6.2f} dB" if tr["spl"] is not None else ""
+        unit = "Pa" if tr["unit"].startswith("Pressure") else ""
         print(f"  {tr['title']}")
+        print(f"    peak = {tr['peak']:.4g} {unit}, rms = {tr['rms']:.4g} {unit}{spl_str}")
     print()
 
     for tr in traces:
