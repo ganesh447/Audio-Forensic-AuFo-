@@ -18,13 +18,13 @@ After all utterances:
 
 import csv
 import random
-import shutil
+import shutil 
 import sys
 from math import gcd
 from pathlib import Path
 
 import numpy as np
-import soundfile as sf
+import soundfile as sf   
 from scipy.signal import fftconvolve, bilinear, lfilter
 from tqdm import tqdm
 from gammatone.filters import erb_space, make_erb_filters, erb_filterbank
@@ -49,9 +49,9 @@ REAL_CSV     = RIR_DIR / "real_selected_rirs.csv"
 
 TARGET_SR       = 16_000
 WINDOW_SECS     = 4.0
-HOP_SECS        = 0.5
+HOP_SECS        = 3.5
 WINDOW_SAMPLES  = int(WINDOW_SECS * TARGET_SR)   # 64 000
-HOP_SAMPLES     = int(HOP_SECS   * TARGET_SR)    # 8 000
+HOP_SAMPLES     = int(HOP_SECS   * TARGET_SR)    # 56 000
 SILENCE_DB      = 20.0      # discard chunk if RMS > 20 dB below full clip
 N_BANDS         = 21        # gammatone bands
 FREQ_LOW        = 400.0     # Hz
@@ -59,7 +59,7 @@ FREQ_HIGH       = 6000.0    # Hz
 FRAME_SIZE      = 64        # samples per log-energy frame
 FRAME_HOP       = 32        # hop between frames
 CLIPS_PER_RIR     = 1    # clips per selected speaker per RIR
-SPEAKERS_PER_RIR  = 3    # randomly sample 3 of 10 speakers per RIR → ~32k matrices
+SPEAKERS_PER_RIR  = 4    # randomly sample 3 of 10 speakers per RIR → ~32k matrices
 
 
 # ── A-weighting filter ─────────────────────────────────────────────────────────
@@ -143,7 +143,7 @@ def chunk_utterance(reverberant: np.ndarray, fs: int, aw_b: np.ndarray, aw_a: np
             rms_w = np.sqrt(np.mean(weighted ** 2))
             if rms_w > 1e-9:
                 chunk = chunk / rms_w
-            chunks.append(chunk)
+                chunks.append(chunk)
         start += HOP_SAMPLES
     return chunks
 
